@@ -100,6 +100,7 @@ public class KillAura extends Module {
     public final BooleanSetting infSwitch       = new BooleanSetting("Infinity Switch", false);
     public final BooleanSetting preferBaby      = new BooleanSetting("Prefer Baby", false);
     public final BooleanSetting morePart        = new BooleanSetting("More Particles", false);
+    public final BooleanSetting keepSprint = new BooleanSetting("Keep Sprint", true);
     public final ModeSetting style = new ModeSetting("Style", "New", "Old", "onTickRot").withDefault("New");
 
     public final BooleanSetting fix             = new BooleanSetting("Fix", false,
@@ -121,6 +122,7 @@ public class KillAura extends Module {
     public final NumberSetting fov         = new NumberSetting("FoV", 360.0, 10.0, 360.0, 1.0);
     public final NumberSetting hurtTime    = new NumberSetting("Hurt Time", 10.0, 0.0, 10.0, 1.0);
     public final ModeSetting delayMode    = new ModeSetting("Delay Mode", "1.8", "1.9").withDefault("1.8");
+
     public final ModeSetting priorityMode = new ModeSetting("Priority", "Distance", "FoV", "Health", "None").withDefault("FoV");
     public final ModeSetting targetEsp    = new ModeSetting("Target ESP", "None", "Spiral", "Box", "Tab", "NurikZapen").withDefault("NurikZapen");
 
@@ -740,6 +742,9 @@ public class KillAura extends Module {
             return this.attackEntityNewFix(entity);
         }
 
+        // KeepSprint(参考 res саѕһa): 攻击前记录疾跑状态, 疾跑攻击时保持疾跑
+        boolean keepSprinting = this.keepSprint.getValue() && mc.player.isSprinting();
+
         float currentYaw = mc.player.getYRot();
         float currentPitch = mc.player.getXRot();
         if (RotationHandler.targetRotation != null) {
@@ -759,6 +764,11 @@ public class KillAura extends Module {
             mc.player.crit(entity);
         }
 
+        // KeepSprint: 攻击后保持疾跑(若疾跑被打断则恢复)
+        if (keepSprinting && !mc.player.isSprinting()) {
+            mc.player.setSprinting(true);
+        }
+
         mc.player.setYRot(currentYaw);
         mc.player.setXRot(currentPitch);
 
@@ -770,6 +780,9 @@ public class KillAura extends Module {
 
     private boolean attackEntityNewFix(Entity entity) {
         if (mc.getConnection() == null) return false;
+
+        // KeepSprint(参考 res саѕһa): 攻击前记录疾跑状态
+        boolean keepSprinting = this.keepSprint.getValue() && mc.player.isSprinting();
 
         float origYaw = mc.player.getYRot();
         float origPitch = mc.player.getXRot();
@@ -809,6 +822,11 @@ public class KillAura extends Module {
                 origPitch + jitter3,
                 mc.player.onGround()
         ));
+
+        // KeepSprint: 攻击后保持疾跑(若疾跑被打断则恢复)
+        if (keepSprinting && !mc.player.isSprinting()) {
+            mc.player.setSprinting(true);
+        }
 
         return true;
     }

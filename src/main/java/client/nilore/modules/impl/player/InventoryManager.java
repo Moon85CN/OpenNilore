@@ -232,6 +232,11 @@ public class InventoryManager extends Module {
     }
 
     private boolean performInventoryAction() {
+        // invOnly=false 静默整理时,疾跑中不发出整理动作:返回 false 表示本 tick 不动,
+        // 停下疾跑后下一 tick 自动继续,整理任务(pendingOffhandPlace 等)不丢失
+        if (!this.inventoryOnlySetting.getValue() && mc.player.isSprinting()) {
+            return false;
+        }
         // --- auto armor: drop bad armor we're wearing ---
         if (this.autoArmorSetting.getValue()) {
             for (int i = 0; i < mc.player.getInventory().armor.size(); i++) {
@@ -509,6 +514,10 @@ public class InventoryManager extends Module {
         // 此时不应报告"有待整理动作",否则 Disabler 的 Silent Sprint 会误以为
         // 正在静默整理而把疾跑关掉,实际却什么都没整理。
         if (this.shouldPauseForAction()) return false;
+
+        // invOnly=false 时疾跑状态下不开始整理(onMotionManage 的 gate),
+        // 同样不应报告有待整理动作,否则 Disabler 会在疾跑中强关疾跑却又不整理
+        if (!this.inventoryOnlySetting.getValue() && mc.player.isSprinting()) return false;
 
         // --- auto armor: drop bad armor we're wearing / equip better armor ---
         if (this.autoArmorSetting.getValue()) {
