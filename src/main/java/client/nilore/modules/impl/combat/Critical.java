@@ -1,52 +1,60 @@
 package client.nilore.modules.impl.combat;
 
+import net.minecraft.core.BlockPos;
 import net.minecraft.network.protocol.Packet;
+import net.minecraft.network.protocol.game.ServerGamePacketListener;
 import net.minecraft.network.protocol.game.ServerboundInteractPacket;
 import net.minecraft.network.protocol.game.ServerboundMovePlayerPacket;
-import net.minecraft.network.protocol.game.ServerboundPlayerCommandPacket;
-import net.minecraft.network.protocol.game.ServerboundUseItemOnPacket;
-import net.minecraft.world.InteractionHand;
+import net.minecraft.network.protocol.game.ServerboundPlayerActionPacket;
+import net.minecraft.util.Mth;
 import net.minecraft.world.effect.MobEffects;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.LivingEntity;
-import net.minecraft.world.item.ItemStack;
-import net.minecraft.world.level.ClipContext;
-import net.minecraft.world.phys.BlockHitResult;
-import net.minecraft.world.phys.HitResult;
-import net.minecraft.world.phys.Vec3;
+import net.minecraft.world.level.block.BaseEntityBlock;
+import net.minecraft.world.phys.AABB;
 import client.nilore.event.EventTarget;
 import client.nilore.event.impl.PacketEvent;
-import client.nilore.event.impl.TickEvent;
+import client.nilore.event.impl.PreMotionEvent;
 import client.nilore.modules.Category;
 import client.nilore.modules.Module;
+import client.nilore.modules.impl.combat.antikb.NoXZMode;
 import client.nilore.modules.impl.player.Stuck;
+import client.nilore.settings.impl.BooleanSetting;
+import client.nilore.settings.impl.ModeSetting;
 import client.nilore.settings.impl.NumberSetting;
 import client.nilore.utils.game.ItemUtil;
+import client.nilore.utils.math.MathUtil;
 import client.nilore.utils.misc.PacketUtil;
+import client.nilore.utils.misc.ReflectionUtil;
 import client.nilore.utils.rotation.Rotation;
 import client.nilore.utils.rotation.RotationHandler;
 
 /**
- * 照抄桌面 res/package_012/CriticalsModule.java (LiquidBounce 系 Criticals), 只保留
- * TargetTick 设置, 默认执行 Legit(1.9+ 合法暴击)逻辑:
- * - onPacket: 拦截攻击包(ServerboundInteractPacket)/放置包(ServerboundUseItemOnPacket),
- *   取消后先发伪造旋转移动包(ServerboundMovePlayerPacket.Rot)再重发原包
- * - onTick: 发 STOP_SPRINTING 包(1.9+ 暴击需非疾跑)
- * - canCrit: 冷却 + 落距窗口 <= TargetTick + 未来落点预测(参考 оіа)
+ * Critical - 移植自 res/CriticalsModule.java (EdNaven, 反混淆)
+ *
+ * 只实现 1.9 分支:
+ * - 每 TargetTick tick 发送 StatusOnly 包翻转服务器端 onGround 状态,
+ *   配合 KillAura 松疾跑后的下落状态触发 1.9 暴击判定
+ * - 拦截攻击包(PlayerInteract/PlayerAction), 先发送一个微调 yaw/pitch 的
+ *   Rot 包, 再重发攻击包
+ * - 疾跑中不干预(isUnCritable), 由 KillAura KeepSprint 协调疾跑状态
  */
 public class Critical extends Module {
     public static Critical INSTANCE;
 
-    /* ======================== Settings (参考 CriticalsModule: 仅 TargetTick) ======================== */
-    // 参考 јiс: 暴击落距窗口(tick)
-    public final NumberSetting targetTick = new NumberSetting("TargetTick", 2, 0.1, 3, 0.1);
+    // res схeрxjр: Mode(["Stuck","1.9"]) — 只做 1.9
+    public final ModeSetting mode = new ModeSetting("Mode", "1.9", "Stuck").withDefault("1.9");
+    // res jраһох: OnGround 包间隔(默认1, 1-3, step1)
+    public final NumberSetting targetTick = new NumberSetting("TargetTick", 1, 1, 3, 1);
+    // res aііоexѕ: 勾选后要求向前移动(zza>0)才暴击, 否则要求下落(deltaY<=-0.08)
+    public final BooleanSetting moveCheck = new BooleanSetting("Move Check", false);
+    // res јiс: 攻击冷却/下落容忍阈值(默认2, 1-3, step0.1)
+    public final NumberSetting cooldown = new NumberSetting("Cooldown", 2.0, 1.0, 3.0, 0.1);
 
-    /* ======================== State (参考 ѕѕроіeо/soх/ѕix/secа) ======================== */
-    private boolean spoofing = false;
-    private boolean sprintSent = false;
-    private int tickCount = 0;
-    private float lastDamage = 0.0f;
-    private float lastPitch = 0.0f;
+    private float lastDamage;   // res secа: 上次攻击伤害
+    private boolean release;    // res soх: true = 暴击窗口已打开, 放行攻击包
+    private boolean lookSent;   // res ѕѕроіeо: 本周期是否已发过 look 包
+    private int tickCount;      // res ѕix: tick 计数器
 
     public Critical() {
         super("Critical", Category.COMBAT);
@@ -59,92 +67,98 @@ public class Critical extends Module {
         super.onDisable();
     }
 
-    /* ======================== onPacket (参考 oоecһхh) ======================== */
+    // res xаaеxs: 重置状态机
+    private void reset() {
+        this.lookSent = true;
+        this.release = true;
+        this.tickCount = (int) this.targetTick.getValue().floatValue();
+    }
+
+    // res oоecһхh: PacketSend 事件 — 拦截攻击包, 发 look 包 + 重发
     @EventTarget
     public void onPacket(PacketEvent event) {
+        if (event.isIncoming()) {
+            return;
+        }
         if (mc.player == null) {
             return;
         }
-        if (!event.isIncoming()) {
-            return; // 只处理 outgoing(发送)包
-        }
         Packet<?> packet = event.getPacket();
+
         if (this.canNotCrit()) {
             this.reset();
             return;
         }
-        // 参考: tick 计数达 1(固定 Delay)且遇到疾跑命令包时重置
-        if (this.tickCount >= 1) {
-            this.sprintSent = true;
-            if (packet instanceof ServerboundPlayerCommandPacket) {
-                this.sprintSent = false;
+
+        // 计数达到 TargetTick 时, 移动包重置计数(重新计时), 其它包锁定窗口并放行
+        if (this.tickCount >= (int) this.targetTick.getValue().floatValue()) {
+            this.release = true;
+            if (packet instanceof ServerboundMovePlayerPacket) {
+                this.release = false;
                 this.tickCount = 0;
             }
         }
-        if (this.sprintSent) {
+        if (this.release) {
             return;
         }
-        // 参考: 只处理攻击包(class_2824) + 放置方块包(class_2885)
-        final boolean[] isAttack = {false};
-        if (packet instanceof ServerboundInteractPacket interact) {
-            interact.dispatch(new ServerboundInteractPacket.Handler() {
-                @Override
-                public void onAttack() {
-                    isAttack[0] = true;
-                }
 
-                @Override
-                public void onInteraction(InteractionHand hand) {
-                }
-
-                @Override
-                public void onInteraction(InteractionHand hand, Vec3 location) {
-                }
-            });
-        }
-        if (!isAttack[0] && !(packet instanceof ServerboundUseItemOnPacket)) {
+        if (!(packet instanceof ServerboundInteractPacket)
+                && !(packet instanceof ServerboundPlayerActionPacket)) {
             return;
         }
+
         event.setCancelled(true);
-        // 参考: 伪造旋转移动包, 优先用全局旋转(RotationHandler), 否则玩家当前旋转
-        Rotation rot = RotationHandler.targetRotation != null
+
+        // 取旋转系统的目标旋转(若在旋转), 否则当前视角; yaw/pitch 各加随机微抖
+        Rotation rotation = (RotationHandler.isRotating && RotationHandler.targetRotation != null)
                 ? RotationHandler.targetRotation
                 : new Rotation(mc.player.getYRot(), mc.player.getXRot());
-        float yaw = rot.getYaw() + (float) (Math.random() * 0.002 + 0.002);
-        float pitch = rot.getPitch() - (float) (Math.random() * 0.002 + 0.002);
-        float smoothedPitch = this.lastPitch + (pitch - this.lastPitch);
-        PacketUtil.sendQueued(new ServerboundMovePlayerPacket.Rot(smoothedPitch, yaw, mc.player.onGround()));
-        this.lastPitch = smoothedPitch;
-        this.spoofing = true;
-        PacketUtil.sendQueued((net.minecraft.network.protocol.Packet<net.minecraft.network.protocol.game.ServerGamePacketListener>) packet); // 重发原攻击/放置包
+        float pitch = rotation.getPitch() - (float) MathUtil.randomDouble(0.002, 0.004);
+        float yaw = rotation.getYaw() + (float) MathUtil.randomDouble(0.002, 0.004);
+        float pitchOut = Mth.wrapDegrees(pitch);
+
+        // res: new LookAndOnGround(f2, callSite, onGround) + field_12887(yRot)=f2
+        // mojmap: LookAndOnGround = Rot
+        ServerboundMovePlayerPacket.Rot look =
+                new ServerboundMovePlayerPacket.Rot(pitchOut, yaw, mc.player.onGround());
+        ReflectionUtil.setYRot(look, pitchOut);
+        this.lookSent = true;
+
+        PacketUtil.sendQueued(look);
+        PacketUtil.sendQueued((Packet<ServerGamePacketListener>) packet);
     }
 
-    /* ======================== onTick (参考 һoе, STOP_SPRINTING) ======================== */
-    @EventTarget
-    public void onTick(TickEvent event) {
+    // res һoе: Tick 事件 — 计数 + 发送 OnGroundOnly 包
+    @EventTarget(value = 4)
+    public void onPreMotion(PreMotionEvent event) {
         if (mc.player == null) {
             return;
         }
         if (this.canNotCrit()) {
             return;
         }
-        if (++this.tickCount == 1) {
-            if (!this.spoofing) {
-                PacketUtil.sendQueued(new ServerboundPlayerCommandPacket(mc.player, ServerboundPlayerCommandPacket.Action.STOP_SPRINTING));
+
+        if (++this.tickCount == (int) this.targetTick.getValue().floatValue()) {
+            if (!this.lookSent) {
+                // res: OnGroundOnly = StatusOnly
+                PacketUtil.sendQueued(new ServerboundMovePlayerPacket.StatusOnly(mc.player.onGround()));
             } else {
-                this.spoofing = false;
+                this.lookSent = false;
             }
         }
+        // res: if (!soх) event.setCancelled(true) 取消 tick 冻结玩家;
+        // nilore TickEvent 不可取消, 此步省略(由移动包自然驱动)
     }
 
-    /* ======================== 判定 ======================== */
-
-    // 参考 сіһa(): 返回"不能暴击"
+    // res сiһa: 是否不可暴击
     private boolean canNotCrit() {
         if (mc.player == null || KillAura.target == null) {
             return true;
         }
-        if (this.isUnCritable()) {
+        if (this.mode.is("Stuck")) {
+            return true;
+        }
+        if (this.isUnCritable(false) || NoXZMode.handlingVelocity) {
             return true;
         }
         if (mc.player.distanceTo(KillAura.target) > 9.0) {
@@ -153,11 +167,14 @@ public class Critical extends Module {
         if (Stuck.INSTANCE != null && Stuck.INSTANCE.isEnabled()) {
             return true;
         }
+        if (this.moveCheck.getValue()) {
+            return mc.player.zza <= 0.0f;
+        }
         return mc.player.getDeltaMovement().y > -0.08;
     }
 
-    // 参考 ѕхi(): 异常状态(效果/潜行/使用物品/飞行/骑乘/梯子/水/岩浆)
-    private boolean isUnCritable() {
+    // res ѕхi(bl): 药水/状态/疾跑检查
+    private boolean isUnCritable(boolean allowSprint) {
         if (mc.player == null) {
             return true;
         }
@@ -171,87 +188,90 @@ public class Critical extends Module {
                 || mc.player.onClimbable()) {
             return true;
         }
-        return mc.player.isInWater() || mc.player.isInLava();
+        if (!allowSprint && mc.player.isSprinting()) {
+            return true;
+        }
+        return mc.player.isInWater() || mc.player.isInLava() || this.isBlockedByTileEntity();
     }
 
-    // 参考 һрсріһp(): 当前攻击能否打出暴击(供 KillAura 集成)
-    public boolean canCrit(Entity entity) {
-        if (!this.isEnabled() || mc.player == null) {
-            return false;
-        }
-        if (mc.player.isOnFire() || mc.player.isUsingItem()
-                || mc.player.isFallFlying() || mc.player.isShiftKeyDown()) {
-            return false;
-        }
-        if (!(entity instanceof LivingEntity target)) {
-            return false;
-        }
-        float damage = this.getCritDamage();
-        if (target.hurtTime > 0 && damage <= this.lastDamage) {
-            return false;
-        }
-        if (this.isUnCritable()) {
-            return false;
-        }
-        double velY = mc.player.getDeltaMovement().y;
-        if (velY < -0.08) {
-            this.lastDamage = damage;
-            return false; // 正在下落, 等落地再判
-        }
-        float cooldown = mc.player.getAttackStrengthScale(0.5f);
-        float fallTicks = Math.max(0.0f, (0.95f - cooldown) * mc.player.getCurrentItemAttackStrengthDelay());
-        float dist = Math.max(fallTicks, (float) (velY / 0.08));
-        if (dist > this.targetTick.getValue().floatValue()) {
-            return false;
-        }
-        // 参考: оіа((int)(dist * 1.3f)) == null → 未来落点预测, 预测 tick 内会撞地则不能暴击
-        return !this.wouldHitGround((int) (dist * 1.3f));
-    }
-
-    // 参考 paeсіoх(): 暴击伤害计算
-    private float getCritDamage() {
-        if (mc.player == null) {
-            return -1.0f;
-        }
-        ItemStack stack = mc.player.getMainHandItem();
-        float base = (float) ItemUtil.getAttackDamage(stack);
-        float cooldown = mc.player.getAttackStrengthScale(0.5f);
-        float damage = base * (0.2f + cooldown * cooldown * 0.8f);
-        if (mc.player.getDeltaMovement().y < -0.08) {
-            damage *= 1.5f;
-        }
-        return damage;
-    }
-
-    // 参考 оіа(int): 模拟下落, ticks tick 内会落地(撞到地面方块)则返回 true
-    private boolean wouldHitGround(int ticks) {
+    // res еaјoһрѕ: 玩家 bounding box 周围有带方块实体(BaseEntityBlock)的方块时不可暴击
+    private boolean isBlockedByTileEntity() {
         if (mc.player == null || mc.level == null) {
             return false;
         }
-        if (mc.player.getDeltaMovement().y >= 0) {
-            return false;
-        }
-        Vec3 start = new Vec3(mc.player.getX(), mc.player.getBoundingBox().minY, mc.player.getZ());
-        BlockHitResult hit = mc.level.clip(new ClipContext(start, start.add(0.0, -30.0, 0.0), ClipContext.Block.COLLIDER, ClipContext.Fluid.NONE, mc.player));
-        if (hit.getType() == HitResult.Type.MISS) {
-            return false;
-        }
-        double distance = start.y - hit.getLocation().y;
-        double drop = 0.0;
-        double velocity = mc.player.getDeltaMovement().y;
-        for (int i = 0; i < ticks; i++) {
-            drop += velocity;
-            velocity = (velocity - 0.08) * 0.98;
-            if (Math.abs(drop) >= distance) {
-                return true;
+        AABB box = mc.player.getBoundingBox();
+        for (int x = Mth.floor(box.minX); x < Mth.ceil(box.maxX); ++x) {
+            for (int y = Mth.floor(box.minY); y < Mth.ceil(box.maxY); ++y) {
+                for (int z = Mth.floor(box.minZ); z < Mth.ceil(box.maxZ); ++z) {
+                    if (mc.level.getBlockState(new BlockPos(x, y, z)).getBlock() instanceof BaseEntityBlock) {
+                        return true;
+                    }
+                }
             }
         }
         return false;
     }
 
-    private void reset() {
-        this.spoofing = false;
-        this.sprintSent = false;
-        this.tickCount = 0;
+    // res һрсріһp: 供 KillAura 判断是否应对目标暴击(仅 1.9 mode)
+    public boolean shouldCritTarget(Entity target) {
+        if (!this.isEnabled() || !this.mode.is("1.9") || mc.player == null) {
+            return false;
+        }
+        if (mc.player.isUsingItem() || mc.player.isFallFlying()
+                || mc.player.onClimbable() || mc.player.isInWater()) {
+            return false;
+        }
+        if (!(target instanceof LivingEntity living)) {
+            return false;
+        }
+
+        float damage = this.getAttackDamage();
+        if (living.hurtTime > 0 && damage <= this.lastDamage) {
+            return false;
+        }
+        if (this.isUnCritable(false)) {
+            return false;
+        }
+
+        double deltaY = mc.player.getDeltaMovement().y;
+        if (deltaY < -0.08) {
+            this.lastDamage = damage;
+            return false;
+        }
+        float cooldown = mc.player.getAttackStrengthScale(0.5f);
+        float f = Math.max(0.0f, (0.95f - cooldown) * mc.player.getAttackStrengthScale(0.0f));
+        float f2 = Math.max(f, (float) (deltaY / 0.08));
+        if (f2 > this.cooldown.getValue().floatValue()) {
+            return false;
+        }
+        return !this.hasBlockAbove((int) (f2 * 1.3f));
+    }
+
+    // res paeсіoх: 当前主手武器伤害(含冷却/暴击加成)
+    private float getAttackDamage() {
+        if (mc.player == null) {
+            return -1.0f;
+        }
+        float progress = mc.player.getAttackStrengthScale(0.5f);
+        float value = (float) ItemUtil.getAttackDamage(mc.player.getMainHandItem());
+        value = value * (0.2f + progress * progress * 0.8f);
+        if (!this.isUnCritable(false) && mc.player.getDeltaMovement().y < -0.08) {
+            value *= 1.5f;
+        }
+        return value;
+    }
+
+    // res mc.player.оіа((int)(f2 * 1.3f)) == null: 头顶 height 格内无方块
+    private boolean hasBlockAbove(int height) {
+        if (mc.player == null || mc.level == null) {
+            return false;
+        }
+        BlockPos pos = mc.player.blockPosition();
+        for (int i = 1; i <= height; i++) {
+            if (!mc.level.getBlockState(pos.above(i)).isAir()) {
+                return true;
+            }
+        }
+        return false;
     }
 }

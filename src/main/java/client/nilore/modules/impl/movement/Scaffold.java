@@ -566,7 +566,7 @@ public class Scaffold extends Module {
                 : null;
 
         FontRenderer nameFont = FontPresets.pingfang(18f);
-        FontRenderer countFont = FontPresets.axiformaRegular(18f);
+        FontRenderer countFont = FontPresets.openSans(18f);
         float textWidth = GlHelper.getStringWidth(itemName, nameFont)
                 + GlHelper.getStringWidth(" " + countStr, countFont);
         float padX = 6f;
@@ -598,8 +598,8 @@ public class Scaffold extends Module {
                             : 0xFFFFFFFF;
                     cursor = GlHelper.drawText(ch, cursor, textY + 0.75f, nameFont, color);
                 }
-                // 数量：axiforma_regular 白色（下移 1f、右移 1f）
-                GlHelper.drawText(" " + countStr, cursor + 1f, textY + 1.5f, countFont, 0xFFFFFFFF);
+                // 数量：openSans 白色（下移 1f、右移 1f）
+                GlHelper.drawText(" " + countStr, cursor + 1f, textY + 0.75f, countFont, 0xFFFFFFFF);
             }
         });
     }
