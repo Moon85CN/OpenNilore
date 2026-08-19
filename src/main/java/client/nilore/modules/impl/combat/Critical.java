@@ -29,32 +29,18 @@ import client.nilore.utils.misc.ReflectionUtil;
 import client.nilore.utils.rotation.Rotation;
 import client.nilore.utils.rotation.RotationHandler;
 
-/**
- * Critical - 移植自 res/CriticalsModule.java (EdNaven, 反混淆)
- *
- * 只实现 1.9 分支:
- * - 每 TargetTick tick 发送 StatusOnly 包翻转服务器端 onGround 状态,
- *   配合 KillAura 松疾跑后的下落状态触发 1.9 暴击判定
- * - 拦截攻击包(PlayerInteract/PlayerAction), 先发送一个微调 yaw/pitch 的
- *   Rot 包, 再重发攻击包
- * - 疾跑中不干预(isUnCritable), 由 KillAura KeepSprint 协调疾跑状态
- */
 public class Critical extends Module {
     public static Critical INSTANCE;
 
-    // res схeрxjр: Mode(["Stuck","1.9"]) — 只做 1.9
     public final ModeSetting mode = new ModeSetting("Mode", "1.9", "Stuck").withDefault("1.9");
-    // res jраһох: OnGround 包间隔(默认1, 1-3, step1)
     public final NumberSetting targetTick = new NumberSetting("TargetTick", 1, 1, 3, 1);
-    // res aііоexѕ: 勾选后要求向前移动(zza>0)才暴击, 否则要求下落(deltaY<=-0.08)
     public final BooleanSetting moveCheck = new BooleanSetting("Move Check", false);
-    // res јiс: 攻击冷却/下落容忍阈值(默认2, 1-3, step0.1)
     public final NumberSetting cooldown = new NumberSetting("Cooldown", 2.0, 1.0, 3.0, 0.1);
 
-    private float lastDamage;   // res secа: 上次攻击伤害
-    private boolean release;    // res soх: true = 暴击窗口已打开, 放行攻击包
-    private boolean lookSent;   // res ѕѕроіeо: 本周期是否已发过 look 包
-    private int tickCount;      // res ѕix: tick 计数器
+    private float lastDamage;
+    private boolean release;
+    private boolean lookSent;
+    private int tickCount;
 
     public Critical() {
         super("Critical", Category.COMBAT);
@@ -67,14 +53,12 @@ public class Critical extends Module {
         super.onDisable();
     }
 
-    // res xаaеxs: 重置状态机
     private void reset() {
         this.lookSent = true;
         this.release = true;
         this.tickCount = (int) this.targetTick.getValue().floatValue();
     }
 
-    // res oоecһхh: PacketSend 事件 — 拦截攻击包, 发 look 包 + 重发
     @EventTarget
     public void onPacket(PacketEvent event) {
         if (event.isIncoming()) {
@@ -90,7 +74,6 @@ public class Critical extends Module {
             return;
         }
 
-        // 计数达到 TargetTick 时, 移动包重置计数(重新计时), 其它包锁定窗口并放行
         if (this.tickCount >= (int) this.targetTick.getValue().floatValue()) {
             this.release = true;
             if (packet instanceof ServerboundMovePlayerPacket) {
@@ -109,7 +92,6 @@ public class Critical extends Module {
 
         event.setCancelled(true);
 
-        // 取旋转系统的目标旋转(若在旋转), 否则当前视角; yaw/pitch 各加随机微抖
         Rotation rotation = (RotationHandler.isRotating && RotationHandler.targetRotation != null)
                 ? RotationHandler.targetRotation
                 : new Rotation(mc.player.getYRot(), mc.player.getXRot());
@@ -117,8 +99,6 @@ public class Critical extends Module {
         float yaw = rotation.getYaw() + (float) MathUtil.randomDouble(0.002, 0.004);
         float pitchOut = Mth.wrapDegrees(pitch);
 
-        // res: new LookAndOnGround(f2, callSite, onGround) + field_12887(yRot)=f2
-        // mojmap: LookAndOnGround = Rot
         ServerboundMovePlayerPacket.Rot look =
                 new ServerboundMovePlayerPacket.Rot(pitchOut, yaw, mc.player.onGround());
         ReflectionUtil.setYRot(look, pitchOut);
@@ -128,7 +108,6 @@ public class Critical extends Module {
         PacketUtil.sendQueued((Packet<ServerGamePacketListener>) packet);
     }
 
-    // res һoе: Tick 事件 — 计数 + 发送 OnGroundOnly 包
     @EventTarget(value = 4)
     public void onPreMotion(PreMotionEvent event) {
         if (mc.player == null) {
@@ -140,17 +119,13 @@ public class Critical extends Module {
 
         if (++this.tickCount == (int) this.targetTick.getValue().floatValue()) {
             if (!this.lookSent) {
-                // res: OnGroundOnly = StatusOnly
                 PacketUtil.sendQueued(new ServerboundMovePlayerPacket.StatusOnly(mc.player.onGround()));
             } else {
                 this.lookSent = false;
             }
         }
-        // res: if (!soх) event.setCancelled(true) 取消 tick 冻结玩家;
-        // nilore TickEvent 不可取消, 此步省略(由移动包自然驱动)
     }
 
-    // res сiһa: 是否不可暴击
     private boolean canNotCrit() {
         if (mc.player == null || KillAura.target == null) {
             return true;
@@ -173,7 +148,6 @@ public class Critical extends Module {
         return mc.player.getDeltaMovement().y > -0.08;
     }
 
-    // res ѕхi(bl): 药水/状态/疾跑检查
     private boolean isUnCritable(boolean allowSprint) {
         if (mc.player == null) {
             return true;
@@ -194,7 +168,6 @@ public class Critical extends Module {
         return mc.player.isInWater() || mc.player.isInLava() || this.isBlockedByTileEntity();
     }
 
-    // res еaјoһрѕ: 玩家 bounding box 周围有带方块实体(BaseEntityBlock)的方块时不可暴击
     private boolean isBlockedByTileEntity() {
         if (mc.player == null || mc.level == null) {
             return false;
@@ -212,7 +185,6 @@ public class Critical extends Module {
         return false;
     }
 
-    // res һрсріһp: 供 KillAura 判断是否应对目标暴击(仅 1.9 mode)
     public boolean shouldCritTarget(Entity target) {
         if (!this.isEnabled() || !this.mode.is("1.9") || mc.player == null) {
             return false;
@@ -247,7 +219,6 @@ public class Critical extends Module {
         return !this.hasBlockAbove((int) (f2 * 1.3f));
     }
 
-    // res paeсіoх: 当前主手武器伤害(含冷却/暴击加成)
     private float getAttackDamage() {
         if (mc.player == null) {
             return -1.0f;
@@ -261,7 +232,6 @@ public class Critical extends Module {
         return value;
     }
 
-    // res mc.player.оіа((int)(f2 * 1.3f)) == null: 头顶 height 格内无方块
     private boolean hasBlockAbove(int height) {
         if (mc.player == null || mc.level == null) {
             return false;

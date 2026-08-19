@@ -82,6 +82,10 @@ public class InventoryManager extends Module {
     private int sprintWaitTicks = 0;
     public static boolean isPerformingAction = false;
     private boolean skipNextTick = false;
+    // multiaction 绕过:发 STOP_SPRINTING 后需冷却 sprintStopCooldown tick 才允许整理,
+    // 保证 container click 与任何疾跑状态包不同 tick(Grim MultiActions D)
+    private int sprintStopCooldown = 0;
+    private boolean lastSprintState = false;
 
     public InventoryManager() {
         super("InventoryManager", Category.PLAYER, 66);
@@ -92,17 +96,58 @@ public class InventoryManager extends Module {
     protected void onDisable() {
         isPerformingAction = false;
         this.skipNextTick = false;
+        this.sprintStopCooldown = 0;
+        this.lastSprintState = false;
         super.onDisable();
     }
 
     @EventTarget
     public void onSprint(SprintEvent event) {
-        if (!this.inventoryOnlySetting.getValue()
-                && isPerformingAction
-                && mc.player != null) {
+        if (this.inventoryOnlySetting.getValue() || mc.player == null) {
+            return;
+        }
+        boolean nowSprinting = mc.player.isSprinting();
+        // 本 tick 玩家疾跑刚停止(无论 vanilla 松 W 还是别处 setSprinting(false),
+        // STOP_SPRINTING 已发出),置冷却避免整理 click 与疾跑包同 tick
+        if (this.lastSprintState && !nowSprinting) {
+            this.sprintStopCooldown = Math.max(this.sprintStopCooldown, 2);
+        }
+        this.lastSprintState = nowSprinting;
+        // 静默整理会话期间持续压疾跑,防止 Sprint 模块恢复疾跑造成 START/STOP 抖动
+        if (isPerformingAction) {
+            this.suppressSprintForInventory();
+        }
+    }
+
+    /**
+     * 统一压疾跑入口:疾跑中则发 STOP_SPRINTING 并置冷却(整理 click 必须与疾跑状态包
+     * 至少间隔 sprintStopCooldown tick,否则 Grim MultiActions D 会报 multiaction)。
+     * 供 Disabler.onSprint 等外部调用,保证所有疾跑压制路径都走同一个冷却逻辑。
+     */
+    public void suppressSprintForInventory() {
+        if (mc.player == null) {
+            return;
+        }
+        if (mc.player.isSprinting()) {
             mc.options.keySprint.setDown(false);
             mc.player.setSprinting(false);
+            this.sprintStopCooldown = Math.max(this.sprintStopCooldown, 2);
+        } else {
+            mc.options.keySprint.setDown(false);
         }
+    }
+
+    /**
+     * 静默整理会话是否在进行(InvOnly=false):只由"是否有整理需求"决定。
+     * sprintStopCooldown 仅负责在 gate 挡整理 click(等 STOP 与服务端同步),
+     * 不参与 isPerformingAction——否则玩家刚停疾跑(cooldown>0)即使空身、
+     * 无整理需求也会被 onSprint 压掉疾跑键(站着不动也会被短暂压制)。
+     */
+    private boolean silentSessionActive() {
+        if (this.inventoryOnlySetting.getValue()) {
+            return false;
+        }
+        return this.hasPendingActions();
     }
 
     @EventTarget
@@ -214,7 +259,9 @@ public class InventoryManager extends Module {
         if (this.performInventoryAction()) {
             isPerformingAction = true;
         } else {
-            isPerformingAction = false;
+            // 冷却中或仍有待整理动作时保持 isPerformingAction=true,
+            // 让 onSprint 持续压疾跑、Sprint 模块不恢复疾跑(避免 START/STOP 抖动)
+            isPerformingAction = this.silentSessionActive();
             this.skipNextTick = true;
         }
     }
@@ -232,10 +279,21 @@ public class InventoryManager extends Module {
     }
 
     private boolean performInventoryAction() {
-        // invOnly=false 静默整理时,疾跑中不发出整理动作:返回 false 表示本 tick 不动,
-        // 停下疾跑后下一 tick 自动继续,整理任务(pendingOffhandPlace 等)不丢失
-        if (!this.inventoryOnlySetting.getValue() && mc.player.isSprinting()) {
-            return false;
+        // invOnly=false 静默整理时:疾跑中若确有整理需求则主动压疾跑去整理
+        // (不需玩家手动松 W),否则保持疾跑自由;压疾跑后经 sprintStopCooldown 冷却
+        // 才发 container click,保证 click 与疾跑状态包不同 tick(Grim MultiActions D)。
+        // 整理任务(pendingOffhandPlace 等)在等待期间不丢失
+        if (!this.inventoryOnlySetting.getValue()) {
+            if (mc.player.isSprinting()) {
+                if (this.hasPendingActions()) {
+                    this.suppressSprintForInventory();
+                }
+                return false;
+            }
+            if (this.sprintStopCooldown > 0) {
+                this.sprintStopCooldown--;
+                return false;
+            }
         }
         // --- auto armor: drop bad armor we're wearing ---
         if (this.autoArmorSetting.getValue()) {
@@ -515,9 +573,11 @@ public class InventoryManager extends Module {
         // 正在静默整理而把疾跑关掉,实际却什么都没整理。
         if (this.shouldPauseForAction()) return false;
 
-        // invOnly=false 时疾跑状态下不开始整理(onMotionManage 的 gate),
-        // 同样不应报告有待整理动作,否则 Disabler 会在疾跑中强关疾跑却又不整理
-        if (!this.inventoryOnlySetting.getValue() && mc.player.isSprinting()) return false;
+        // hasPendingActions 纯表示"背包是否有整理需求",不依赖疾跑状态/冷却;
+        // 由 performInventoryAction 的 gate 据此决定是否主动压疾跑去整理。
+        // 若此处也按 isSprinting 提前 return false,玩家疾跑中 gate 将无法判断
+        // 是否有需求,必须等玩家手动停疾跑才开始整理(松按 W 快时还会在 sprinting 下整理)
+
 
         // --- auto armor: drop bad armor we're wearing / equip better armor ---
         if (this.autoArmorSetting.getValue()) {

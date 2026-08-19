@@ -42,19 +42,18 @@ import client.nilore.utils.misc.ChatUtil;
 public class NoXZMode
         extends AntiKBMode {
     public static NoXZMode INSTANCE;
-    // 对齐 res/VelocityModule 状态位: cһеј / cјхіср / xcаohoi
-    public static boolean velocityHandled;      // cһеј: 本次击退已处理(被击飞/等待反击)
-    public static boolean handlingVelocity;    // cјхіср: 已抓到击退包, 等待发起攻击
-    public static int attackCount;             // xcаohoi: 剩余攻击次数
-    public static boolean isAttacking;         // 供 KillAura 降 APS
-    private boolean gotKnockback;              // һоаi: 收到过击退(保持疾跑用)
-    private int onGroundTicks;                 // ееcхѕ: 击退后 tick 计数(>=5 清除)
-    private int delayTicks;                    // pоiio: 等待延迟 tick
-    private int retryCount;                    // ioрjеh: 未命中重试计数
-    private boolean positionReset;             // xcјјоаc: 收到强制位置同步, 惰性重置
-    private Entity target;                     // іһcсһh
-    private long velocityEndTime = -1L;        // ѕсхx: 攻击完成时间戳, 用于关闭 velocityHandled
-    private final LinkedBlockingDeque<Packet<ClientGamePacketListener>> packetQueue = new LinkedBlockingDeque();  // іхaіx
+    public static boolean velocityHandled;
+    public static boolean handlingVelocity;
+    public static int attackCount;
+    public static boolean isAttacking;
+    private boolean gotKnockback;
+    private int onGroundTicks;
+    private int delayTicks;
+    private int retryCount;
+    private boolean positionReset;
+    private Entity target;
+    private long velocityEndTime = -1L;
+    private final LinkedBlockingDeque<Packet<ClientGamePacketListener>> packetQueue = new LinkedBlockingDeque();
 
     public NoXZMode() {
         super("NoXZ");
@@ -101,7 +100,6 @@ public class NoXZMode
     public void onSprint(SprintEvent sprintEvent) {
     }
 
-    // 对齐 res oоecһхh(非 Reduce 延迟分支 + Reduce 防御检查): 延迟击退包, 反击完成后重放
     @Override
     public void onReceivePacket(ReceivePacketEvent receivePacketEvent) {
         if (mc.player == null || mc.level == null) {
@@ -110,12 +108,10 @@ public class NoXZMode
         Packet<ClientGamePacketListener> packet = receivePacketEvent.getPacket();
         if (packet instanceof ClientboundRespawnPacket
                 || packet instanceof ClientboundLoginPacket) {
-            // 跨服/维度切换/重生: 立即重放延迟包并重置, 放行关键包, 防止延迟队列吞掉跨服同步导致卡住
             this.resetAll();
             return;
         }
         if (packet instanceof ClientboundPlayerPositionPacket) {
-            // 对齐 res xcјјоаc: 强制位置同步 -> 惰性标记, 下 tick 重置
             this.positionReset = true;
             if (AntiKB.INSTANCE.debugLog.getValue()) {
                 ChatUtil.print("Flag Detected");
@@ -146,7 +142,6 @@ public class NoXZMode
             return;
         }
         if (handlingVelocity) {
-            // 放行玩家自己的移动包(否则客户端/服务器位置对不上), 其余位置/传送/无用包入队延迟
             if (packet instanceof ClientboundMoveEntityPacket move && move.getEntity(mc.level) == mc.player) {
                 return;
             }
@@ -167,7 +162,6 @@ public class NoXZMode
         this.resetAll();
     }
 
-    // 对齐 res eppоре(onTick) + ррјі(超时关闭): 攻击时机 = 准星命中目标 && 落地 && 攻击冷却就绪(Delay)
     @Override
     public void onTick(TickEvent tickEvent) {
         if (mc.player == null) {
@@ -202,7 +196,6 @@ public class NoXZMode
                 return;
             }
             if (mc.player.getAttackStrengthScale(0.0f) >= 1.0f) {
-                // 对齐 res block23 攻击初始化: 重置计数, 重放延迟包
                 attackCount = AntiKB.INSTANCE.maxCounter.getValue().intValue();
                 this.retryCount = 0;
                 handlingVelocity = false;
@@ -211,7 +204,6 @@ public class NoXZMode
                 return;
             }
         }
-        // 攻击循环: 每 tick 一次, 需持续准星命中+落地
         if (attackCount > 0) {
             if (!this.isAimingAt(this.target)) {
                 ++this.retryCount;
@@ -239,7 +231,6 @@ public class NoXZMode
         }
     }
 
-    // 对齐 res soіhр(onStrafe): AutoForwards 保持前进 + 击退后落地恢复疾跑
     @Override
     public void onStrafe(StrafeEvent strafeEvent) {
         if (mc.player == null) {
@@ -259,7 +250,6 @@ public class NoXZMode
         }
     }
 
-    // 对齐 res aѕрhspc: 防御/环境/目标缺失/Scaffold 时忽略
     private boolean shouldIgnore() {
         if (mc.player == null || mc.level == null) {
             return true;
@@ -276,13 +266,11 @@ public class NoXZMode
         return Scaffold.INSTANCE.isEnabled();
     }
 
-    // 对齐 res Reduce 分支防御: Require KillAura
     private boolean canProcess() {
         return !AntiKB.INSTANCE.requireKillAura.getValue()
                 || (KillAura.INSTANCE != null && KillAura.INSTANCE.isEnabled());
     }
 
-    // 目标: 优先 KillAura 目标; 关闭 Require KillAura 且 KillAura 未开时回退到准星实体
     private Entity getTarget() {
         if (KillAura.target != null) {
             return KillAura.target;
@@ -294,7 +282,6 @@ public class NoXZMode
         return null;
     }
 
-    // 对齐 res jcіhј: 准星(EntityHitResult)命中目标
     private boolean isAimingAt(Entity entity) {
         if (entity == null) {
             return false;
@@ -305,7 +292,6 @@ public class NoXZMode
         return false;
     }
 
-    // 对齐 res hahoсј: 直接攻击+挥手, 不碰疾跑
     private void doAttack(Entity entity) {
         if (mc.player == null || mc.gameMode == null) {
             return;
@@ -314,7 +300,6 @@ public class NoXZMode
         mc.player.swing(InteractionHand.MAIN_HAND);
     }
 
-    // 对齐 res рхіаxs(同步版): 重放全部延迟包
     private void flushQueue() {
         if (mc.getConnection() == null) {
             this.packetQueue.clear();
@@ -335,7 +320,6 @@ public class NoXZMode
         return packet instanceof ClientboundSetEntityMotionPacket || packet instanceof ClientboundSetHealthPacket || packet instanceof ClientboundPlayerPositionPacket || packet instanceof ClientboundRespawnPacket || packet instanceof ClientboundLoginPacket || packet instanceof ClientboundSoundPacket || packet instanceof ClientboundPlayerChatPacket || packet instanceof ClientboundPlayerCombatKillPacket || packet instanceof ClientboundContainerClosePacket || packet instanceof ClientboundHurtAnimationPacket || packet instanceof ClientboundSetTitleTextPacket || packet instanceof ClientboundSetPlayerTeamPacket || packet instanceof ClientboundSystemChatPacket || packet instanceof ClientboundDisconnectPacket || packet instanceof ClientboundAnimatePacket && ((ClientboundAnimatePacket)packet).getId() != mc.player.getId();
     }
 
-    // 对齐 res xаaеxs: 全部状态复位 + 重放延迟包
     private void resetAll() {
         this.flushQueue();
         velocityHandled = false;
