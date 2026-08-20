@@ -390,6 +390,21 @@ public class NoSlow extends Module {
         return INSTANCE != null && INSTANCE.step != Step.NONE;
     }
 
+    /**
+     * NoSlow 是否正在实际处理使用物品(而非仅开启模块): NoC0F 换手状态机
+     * (吃食物/药水/盾牌)、弓类延迟入站包期间、或换手/释放收尾中。
+     * 供 InventoryManager 等判定是否暂停其它发包行为——NoSlow 工作时会发
+     * SWAP_ITEM_WITH_OFFHAND/RELEASE_USE_ITEM 并延迟入站包,整理 click 与之
+     * 同 tick 会触发反作弊,且 NoSlow 工作期间保持疾跑,与整理压疾跑冲突。
+     */
+    public static boolean isActive() {
+        if (INSTANCE == null) return false;
+        return INSTANCE.step != Step.NONE
+                || INSTANCE.bowActive
+                || INSTANCE.didSwapHand
+                || INSTANCE.releaseTicksRemaining > 0;
+    }
+
     private void reset() {
         step = Step.NONE;
         hasSwapped = false;

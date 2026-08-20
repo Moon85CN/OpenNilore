@@ -503,7 +503,7 @@ public class KillAura extends Module {
             float minApsValue;
             if (NoXZMode.isAttacking) {
                 int kbAttackAmount = AntiKB.INSTANCE != null
-                        ? AntiKB.INSTANCE.maxCounter.getValue().intValue()
+                        ? AntiKB.INSTANCE.attackAmount.getValue().intValue()
                         : 0;
                 apsValue = this.maxAps.getValue().floatValue() - kbAttackAmount;
                 minApsValue = this.minAps.getValue().floatValue() - kbAttackAmount;
@@ -517,7 +517,7 @@ public class KillAura extends Module {
             float minApsValue = this.minAps.getValue().floatValue();
             if (NoXZMode.isAttacking) {
                 int kbAttackAmount = AntiKB.INSTANCE != null
-                        ? AntiKB.INSTANCE.maxCounter.getValue().intValue()
+                        ? AntiKB.INSTANCE.attackAmount.getValue().intValue()
                         : 0;
                 apsValue -= kbAttackAmount;
                 minApsValue -= kbAttackAmount;

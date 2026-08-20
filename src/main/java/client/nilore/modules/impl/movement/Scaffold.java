@@ -69,6 +69,7 @@ public class Scaffold extends Module {
     public final BooleanSetting eagle = new BooleanSetting("Eagle", true, () -> this.mode.is("Normal"));
     public final BooleanSetting renderItemSpoof = new BooleanSetting("Render Item Spoof", true);
     public final BooleanSetting clutch = new BooleanSetting("Clutch", true);
+    public final NumberSetting clutchDepth = new NumberSetting("Clutch Depth", 4, 2, 5, 1, this.clutch::getValue);
     public final ModeSetting swingMode = new ModeSetting("Swing", "Both", "Server").withDefault("Both");
     public final BooleanSetting blockCounter = new BooleanSetting("Block Counter", true);
     public final ModeSetting blockCounterStyle = new ModeSetting("Block Counter Style", "Amunix", "Modern", "Naven", "Nitro").withDefault("Modern");
@@ -265,7 +266,8 @@ public class Scaffold extends Module {
             if (this.clutch.getValue() && mc.player.getDeltaMovement().y < -0.1) {
                 MotionSimulator sim = new MotionSimulator(mc.player);
                 sim.simulateWithFriction(2);
-                if (this.currentPlacement.position.getY() > sim.y) {
+                // 预测位置需低于放置层超过 clutchDepth 才进入 clutch, 避免正常搭路时轻微下落误触发
+                if (this.currentPlacement.position.getY() > sim.y + this.clutchDepth.getValue().doubleValue()) {
                     this.canBuildNow = false;
                 }
             }

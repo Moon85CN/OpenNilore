@@ -121,7 +121,7 @@ public class ModuleListHud extends HudElement {
         }
     }
 
-    private static final float MIN_VISIBLE_EDGE = 4.0f;
+    private static final float MIN_VISIBLE_EDGE = 0.0f;
     private static final float DEFAULT_ROW_HEIGHT = 15f;
     private static final float DEFAULT_PADDING_X = 3f;
     private static final float DEFAULT_PADDING_Y = 3.5f;
@@ -237,7 +237,7 @@ public class ModuleListHud extends HudElement {
     }
 
     private List<AnimatedRow> updateRows() {
-        FontRenderer font = FontPresets.pingfang(16.0f);
+        FontRenderer font = FontPresets.pingfang(18.0f);
         boolean importantOnly = this.important.getValue();
         boolean useMcFont = this.useMinecraftFont.getValue();
         for (Module module : NiloreClient.getInstance().getModuleManager().getModules()) {
@@ -514,7 +514,7 @@ public class ModuleListHud extends HudElement {
                     - 10.0f
                     + this.paddingY.getValue().floatValue() * 0.25f;
         } else {
-            FontRenderer font = FontPresets.pingfang(16.0f);
+            FontRenderer font = FontPresets.pingfang(18.0f);
             textWidth = GlHelper.getStringWidth(text, font);
             textY = rowY + (rowHeight - (float) GlHelper.getFontAscent(font)) / 2.0f
                     + this.paddingY.getValue().floatValue() * 0.25f;
@@ -535,7 +535,7 @@ public class ModuleListHud extends HudElement {
                     net.minecraft.client.gui.Font.DisplayMode.NORMAL, 0, 0xF000F0);
             bufferSource.endBatch();
         } else {
-            FontRenderer font = FontPresets.pingfang(16.0f);
+            FontRenderer font = FontPresets.pingfang(18.0f);
             if (FONT_GLOW_ENABLED) {
                 int glowAlphaValue = FONT_GLOW_ALPHA;
                 float radius = FONT_GLOW_RADIUS;

@@ -35,6 +35,7 @@ import client.nilore.event.impl.SprintEvent;
 import client.nilore.modules.Category;
 import client.nilore.modules.Module;
 import client.nilore.modules.impl.combat.KillAura;
+import client.nilore.modules.impl.movement.NoSlow;
 import client.nilore.modules.impl.movement.Scaffold;
 import client.nilore.settings.impl.BooleanSetting;
 import client.nilore.settings.impl.ModeSetting;
@@ -268,6 +269,10 @@ public class InventoryManager extends Module {
 
     private boolean shouldPauseForAction() {
         if (Scaffold.INSTANCE != null && Scaffold.INSTANCE.isEnabled()) return true;
+        // NoSlow 正在实际处理(换手吃/挡、拉弓、释放收尾)时暂停整理,而不是开着就暂停:
+        // 此时 NoSlow 会发 SWAP_ITEM_WITH_OFFHAND/RELEASE_USE_ITEM 并延迟入站包,
+        // 整理 click 与之同 tick 会触发 Grim;且 NoSlow 工作期间保持疾跑,整理压疾跑会冲突
+        if (NoSlow.isActive()) return true;
         // 仅当 KillAura 正在打人(有目标)时暂停整理,而不是开着 KillAura 就暂停;
         // 这样 InvOnly=false 静默整理时无需打开背包
         if (KillAura.INSTANCE != null && KillAura.INSTANCE.isEnabled()
